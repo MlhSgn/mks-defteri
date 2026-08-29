@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#8e2a5f">
+<title>MKS Organizasyon Defteri</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎪</text></svg>">
+</head>
+<body>
+
+<!-- ============ GİRİŞ ============ -->
+<div id="girisEkrani" class="giris gizli">
+  <div class="giris-kutu">
+    <div class="marka-buyuk">
+      <span class="eyebrow">MKS Organizasyon</span>
+      <h1>Defter</h1>
+    </div>
+
+    <form id="girisForm" class="giris-form">
+      <label class="alan">E-POSTA
+        <input type="email" id="gEposta" autocomplete="username" required inputmode="email" placeholder="ornek@eposta.com">
+      </label>
+      <label class="alan">PAROLA
+        <input type="password" id="gParola" autocomplete="current-password" required placeholder="••••••••">
+      </label>
+      <label class="alan gizli" id="gAdAlan">AD SOYAD
+        <input type="text" id="gAd" autocomplete="name" placeholder="Adın">
+      </label>
+      <div id="girisHata" class="hata gizli"></div>
+      <button type="submit" class="btn ana blok" id="girisBtn">Giriş yap</button>
+      <div class="giris-alt">
+        <button type="button" class="btn baglanti" id="kayitGecis">Hesabın yok mu? Kayıt ol</button>
+        <button type="button" class="btn baglanti" id="sifreUnuttum">Parolamı unuttum</button>
+      </div>
+    </form>
+  </div>
+  <p class="giris-dip">Verilerin Frankfurt'taki sunucuda şifreli bağlantıyla saklanır.</p>
+</div>
+
+<!-- ============ UYGULAMA ============ -->
+<div id="uygulama" class="gizli">
+
+  <nav class="yan-ray" id="yanRay" aria-label="Bölümler"></nav>
+
+  <header class="ust">
+    <div class="ust-ic">
+      <button class="defter-sec" id="defterBtn" aria-haspopup="listbox" aria-expanded="false">
+        <span class="d-ad" id="defterAd">MKS Organizasyon</span>
+        <span class="d-ok" aria-hidden="true">▾</span>
+      </button>
+      <div class="ust-sag">
+        <span class="cevrim gizli" id="cevrimDisi" title="Bağlantı yok">Çevrimdışı</span>
+        <button class="avatar" id="hesapBtn" aria-label="Hesabım"><span id="avatarHarf">M</span></button>
+      </div>
+    </div>
+    <nav class="sekmeler" id="ustSekmeler" role="tablist"></nav>
+  </header>
+
+  <main id="icerik" tabindex="-1"></main>
+
+  <nav class="alt-bar" id="altBar" aria-label="Ana gezinme"></nav>
+  <button class="fab gizli" id="fabBtn" aria-label="Yeni kayıt">＋</button>
+</div>
+
+<div id="yukleniyor" class="yukleniyor"><div class="spin" role="status" aria-label="Yükleniyor"></div></div>
+
+<dialog id="modal"></dialog>
+<dialog id="modal2"></dialog>
+<div id="bildirimler" class="bildirimler" aria-live="polite"></div>
+
+<script src="vendor/supabase.js"></script>
+<script src="app.bundle.js"></script>
+</body>
+</html>
