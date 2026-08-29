@@ -3627,7 +3627,27 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
 
   // js/app.js
   var aktifSekme = "panel";
+  var SIFIRLAMA_ANAHTAR = "mks-sifirlama-bekliyor";
   var SIFIRLAMA_ILE_GELDI = /[#&]type=recovery/.test(location.hash);
+  if (SIFIRLAMA_ILE_GELDI) {
+    try {
+      localStorage.setItem(SIFIRLAMA_ANAHTAR, "1");
+    } catch (_) {
+    }
+  }
+  var sifirlamaBekliyor = () => {
+    try {
+      return localStorage.getItem(SIFIRLAMA_ANAHTAR) === "1";
+    } catch (_) {
+      return false;
+    }
+  };
+  var sifirlamayiTemizle = () => {
+    try {
+      localStorage.removeItem(SIFIRLAMA_ANAHTAR);
+    } catch (_) {
+    }
+  };
   function girisiGoster() {
     $("#yukleniyor").classList.add("gizli");
     $("#uygulama").classList.add("gizli");
@@ -3922,6 +3942,7 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
     cikisB.appendChild(c);
     cikisB.onclick = async () => {
       m.kapat();
+      sifirlamayiTemizle();
       await cikisYap();
       location.reload();
     };
@@ -3977,7 +3998,12 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
     $("#yukleniyor").classList.remove("gizli");
     const oturum2 = await oturum();
     if (!oturum2) {
+      sifirlamayiTemizle();
       girisiGoster();
+      return;
+    }
+    if (sifirlamaBekliyor()) {
+      zorunluParolaEkrani();
       return;
     }
     D.kullanici = oturum2.user;
@@ -4051,12 +4077,71 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
     ekranCiz();
     cevrimDurumu();
     masaustuIslemleri();
-    if (SIFIRLAMA_ILE_GELDI) {
-      setTimeout(() => parolaFormu({
-        baslik: "Yeni parola belirle",
-        not: "S\u0131f\u0131rlama ba\u011Flant\u0131s\u0131yla giri\u015F yapt\u0131n. Yeni parolan\u0131 \u015Fimdi belirle."
-      }), 400);
-    }
+  }
+  function zorunluParolaEkrani() {
+    $("#yukleniyor").classList.add("gizli");
+    $("#uygulama").classList.add("gizli");
+    $("#girisEkrani").classList.add("gizli");
+    const g = el("div");
+    const bilgi = el(
+      "p",
+      "basari",
+      "Parola s\u0131f\u0131rlama ba\u011Flant\u0131s\u0131yla geldin. Devam etmek i\xE7in yeni bir parola belirlemelisin."
+    );
+    bilgi.style.margin = "0";
+    g.appendChild(bilgi);
+    const l1 = el("label", "alan", "YEN\u0130 PAROLA (en az 6 karakter)");
+    const p1 = el("input");
+    p1.type = "password";
+    p1.autocomplete = "new-password";
+    l1.appendChild(p1);
+    const l2 = el("label", "alan", "PAROLA TEKRAR");
+    const p2 = el("input");
+    p2.type = "password";
+    p2.autocomplete = "new-password";
+    l2.appendChild(p2);
+    g.append(l1, l2);
+    const not = el(
+      "p",
+      "altbilgi",
+      "Vazge\xE7ersen \xE7\u0131k\u0131\u015F yap\u0131l\u0131r ve programa giremezsin \u2014 ba\u011Flant\u0131 tek ba\u015F\u0131na giri\u015F hakk\u0131 vermez."
+    );
+    not.style.margin = "0";
+    g.appendChild(not);
+    const ayak = el("div");
+    const cikis = el("button", "btn", "Vazge\xE7 ve \xE7\u0131k\u0131\u015F yap");
+    const kaydet = el("button", "btn ana", "Parolay\u0131 belirle");
+    ayak.append(cikis, kaydet);
+    const m = modalAc({ baslik: "Yeni parola belirle", govde: g, ayak, kapatilabilir: false });
+    setTimeout(() => p1.focus(), 80);
+    cikis.onclick = async () => {
+      sifirlamayiTemizle();
+      try {
+        await cikisYap();
+      } catch (_) {
+      }
+      location.replace(location.pathname);
+    };
+    kaydet.onclick = async () => {
+      if (p1.value.length < 6) {
+        bildir("Parola en az 6 karakter olmal\u0131", "kotu");
+        return;
+      }
+      if (p1.value !== p2.value) {
+        bildir("Parolalar ayn\u0131 de\u011Fil", "kotu");
+        return;
+      }
+      kaydet.disabled = true;
+      try {
+        await parolaDegistir(p1.value);
+        sifirlamayiTemizle();
+        bildir("Parolan de\u011Fi\u015Ftirildi", "iyi");
+        setTimeout(() => location.replace(location.pathname), 700);
+      } catch (e) {
+        bildir(e.message, "kotu");
+        kaydet.disabled = false;
+      }
+    };
   }
   function cevrimDurumu() {
     const kapali = !navigator.onLine || D.cevrimdisi;
