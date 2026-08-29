@@ -122,7 +122,10 @@
     if (error) throw new Error(hataMetni(error));
     return data;
   }
-  var gecerliAdres = () => location.protocol === "http:" || location.protocol === "https:" ? location.origin : void 0;
+  var gecerliAdres = () => {
+    if (location.protocol !== "http:" && location.protocol !== "https:") return void 0;
+    return location.origin + location.pathname.replace(/[^/]*$/, "");
+  };
   async function kayitOl(eposta, parola, ad) {
     const secenekler = { data: { ad: (ad || "").trim() } };
     const adres = gecerliAdres();
@@ -286,6 +289,78 @@
   var kategoriYaz = (k, id) => yaz("kategoriler", k, id);
   var kategoriSil = (id) => sil("kategoriler", id);
   var profilYaz = (k, id) => yaz("profiller", k, id);
+  function listeyeEkle(anahtar, kayit) {
+    if (!kayit) return;
+    const liste = D[anahtar];
+    if (!Array.isArray(liste)) return;
+    if (liste.some((x) => x.id === kayit.id)) return;
+    liste.push(kayit);
+    liste.sort((a, b) => String(a.ad ?? "").localeCompare(String(b.ad ?? ""), "tr"));
+  }
+  var defterHesaplari = (kod) => D.hesaplar.filter((h) => h.defter === kod && h.aktif);
+  async function aktarmaYaz({
+    kaynakDefter,
+    kaynakHesapId,
+    hedefDefter,
+    hedefHesapId,
+    tutar,
+    tarih,
+    aciklama,
+    giderMi
+  }) {
+    cevrimdisiKontrol();
+    const isten = kaynakDefter === "is";
+    const etiket = giderMi ? "Yevmiye" : isten ? "K\xE2r pay\u0131" : "Sermaye";
+    const kaynak = {
+      defter: kaynakDefter,
+      tarih,
+      tutar,
+      tur: isten ? giderMi ? "gider" : "cekis" : "cekis",
+      hesap_id: kaynakHesapId,
+      kategori: isten ? giderMi ? "Sahip yevmiyesi" : "K\xE2r pay\u0131" : "\u0130\u015Fletmeye aktar\u0131m",
+      baslik: etiket,
+      aciklama: aciklama || null,
+      organizasyon_id: null,
+      cari_id: null,
+      hedef_hesap_id: null
+    };
+    const hedef = {
+      defter: hedefDefter,
+      tarih,
+      tutar,
+      tur: isten ? "gelir" : "giris",
+      hesap_id: hedefHesapId,
+      kategori: isten ? "D\xFCkkan geliri" : "Sermaye",
+      baslik: etiket,
+      aciklama: aciklama || null,
+      organizasyon_id: null,
+      cari_id: null,
+      hedef_hesap_id: null
+    };
+    const a = await yaz("hareketler", imzala(kaynak, null), null);
+    let b;
+    try {
+      b = await yaz("hareketler", imzala({ ...hedef, eslesen_id: a.id }, null), null);
+    } catch (e) {
+      try {
+        await sil("hareketler", a.id);
+      } catch (_) {
+      }
+      throw e;
+    }
+    await yaz("hareketler", { eslesen_id: b.id }, a.id);
+    return { kaynak: a, hedef: b };
+  }
+  async function aktarmaSil(id, eslesenId) {
+    cevrimdisiKontrol();
+    if (eslesenId) {
+      try {
+        await sil("hareketler", eslesenId);
+      } catch (_) {
+      }
+    }
+    await sil("hareketler", id);
+  }
   async function borclanmalar(cariId) {
     const { data, error } = await sb.from("borclanmalar").select("*").eq("cari_id", cariId).order("tarih", { ascending: false });
     if (error) throw new Error(hataMetni(error));
@@ -674,6 +749,9 @@
       s.appendChild(d("\u{1F91D}", "a", "Yeni Cari", "Tedarik\xE7i veya \xE7al\u0131\u015Fan", () => cariFormu(null)));
     }
     s.appendChild(d("\u21C4", "b", "Para Aktarma", "Hesaplar aras\u0131 transfer", () => transferFormu(null)));
+    if (sahip()) {
+      s.appendChild(d("\u21E2", "a", "Kendime Aktar", "D\xFCkkandan ki\u015Fisele", () => kendimeAktarFormu()));
+    }
     return s;
   }
   function takvimAyi() {
@@ -977,6 +1055,7 @@
   }
   function hareketSatiri(h) {
     if (h.tur === "transfer") return transferSatiri(h);
+    if (h.tur === "cekis" || h.tur === "giris") return aktarmaSatiri(h);
     const r = butonSatir(() => hareketFormu(h));
     const sol = el("div");
     sol.appendChild(el("div", "baslik", h.baslik || h.aciklama || h.kategori));
@@ -1011,14 +1090,29 @@
     r.append(sol, sag);
     return r;
   }
+  function aktarmaSatiri(h) {
+    const cikan = h.tur === "cekis";
+    const r = butonSatir(() => aktarmaDetay(h));
+    const sol = el("div");
+    sol.appendChild(el("div", "baslik", h.baslik || (cikan ? "\xC7eki\u015F" : "Sermaye")));
+    const alt = el("div", "alt");
+    alt.appendChild(el("span", "rozet bilgi", cikan ? "\xC7eki\u015F" : "Sermaye"));
+    alt.appendChild(el("span", "", h.kategori));
+    sol.appendChild(alt);
+    const sag = el("div");
+    sag.appendChild(el("div", "tutar t", (cikan ? "\u2212" : "+") + para(h.tutar)));
+    sag.appendChild(el("div", "tarih", trTarih(h.tarih) + " \xB7 " + hesapAdi(h.hesap_id)));
+    r.append(sol, sag);
+    return r;
+  }
   function hesabaEtki(h, hesapId) {
-    if (h.tur === "gelir" && h.hesap_id === hesapId) return sayi(h.tutar);
-    if (h.tur === "gider" && h.hesap_id === hesapId) return -sayi(h.tutar);
     if (h.tur === "transfer") {
       if (h.hesap_id === hesapId) return -sayi(h.tutar);
       if (h.hedef_hesap_id === hesapId) return sayi(h.tutar);
+      return 0;
     }
-    return 0;
+    if (h.hesap_id !== hesapId) return 0;
+    return h.tur === "gelir" || h.tur === "giris" ? sayi(h.tutar) : -sayi(h.tutar);
   }
   function kasa() {
     const k = el("div", "yigin");
@@ -1030,9 +1124,15 @@
     const sag = el("div", "sag");
     const aktar = el("button", "btn kucuk", "\u21C4 Para Aktarma");
     aktar.onclick = () => transferFormu(null);
+    sag.appendChild(aktar);
+    if (sahip()) {
+      const kendime = el("button", "btn kucuk", "\u21E2 Kendime aktar");
+      kendime.onclick = () => kendimeAktarFormu();
+      sag.appendChild(kendime);
+    }
     const ekle = el("button", "btn ana kucuk", "+ Kay\u0131t");
     ekle.onclick = () => hareketFormu(null);
-    sag.append(aktar, ekle);
+    sag.appendChild(ekle);
     bas.appendChild(sag);
     k.appendChild(bas);
     const donemF = el("div", "filtreler");
@@ -1051,12 +1151,13 @@
     hbBasi.appendChild(tt);
     k.appendChild(hbBasi);
     const kartlar = el("div", "hesap-kartlar");
-    if (!hb.length) {
+    hb.forEach((h) => kartlar.appendChild(hesapKarti(h)));
+    if (yetkili()) kartlar.appendChild(hesapEklemeKarti());
+    if (!hb.length && !yetkili()) {
       const bk = el("section", "panel");
-      bk.appendChild(bosDurum("Hesap yok", "Ayarlar \u2192 Hesaplar b\xF6l\xFCm\xFCnden ekleyebilirsin."));
+      bk.appendChild(bosDurum("Hesap yok", "Y\xF6neticinin hesap tan\u0131mlamas\u0131 gerekiyor."));
       k.appendChild(bk);
     } else {
-      hb.forEach((h) => kartlar.appendChild(hesapKarti(h)));
       k.appendChild(kartlar);
     }
     const hBasi = el("div", "grafik-basi");
@@ -1150,6 +1251,15 @@
     }
     listeCiz();
     return k;
+  }
+  function hesapEklemeKarti() {
+    const kart = el("button", "hesap-k ekle");
+    kart.type = "button";
+    kart.setAttribute("aria-label", "Yeni hesap ekle");
+    kart.appendChild(el("div", "arti", "+"));
+    kart.appendChild(el("div", "yzi", "Yeni Hesap Ekle"));
+    kart.onclick = () => hesapFormu(null);
+    return kart;
   }
   function hesapKarti(h) {
     const kart = el("button", "hesap-k");
@@ -1452,6 +1562,254 @@
       }
     };
   }
+  var pinGecildi = false;
+  async function kisiselKilidiAc() {
+    const kisisel = D.defterler.find((d) => d.tur === "kisisel");
+    if (!kisisel) {
+      bildir("Ki\u015Fisel defter bulunamad\u0131", "kotu");
+      return null;
+    }
+    if (!kisisel.pin_hash || pinGecildi) return kisisel;
+    const ozet = await pinSorVeOzetle(kisisel);
+    if (ozet !== kisisel.pin_hash) {
+      if (ozet !== null) bildir("PIN hatal\u0131", "kotu");
+      return null;
+    }
+    pinGecildi = true;
+    return kisisel;
+  }
+  function pinSorVeOzetle(defter) {
+    return new Promise((coz) => {
+      const g = el("div");
+      const l = el("label", "alan", "K\u0130\u015E\u0130SEL DEFTER PIN'\u0130");
+      const i = el("input");
+      i.type = "password";
+      i.inputMode = "numeric";
+      i.autocomplete = "off";
+      i.placeholder = "\u2022\u2022\u2022\u2022";
+      l.appendChild(i);
+      g.appendChild(l);
+      const not = el(
+        "p",
+        "altbilgi",
+        "Bu i\u015Flem ki\u015Fisel deftere kay\u0131t yazaca\u011F\u0131 i\xE7in PIN soruluyor. Bu oturumda bir kez sorulur."
+      );
+      not.style.margin = "0";
+      g.appendChild(not);
+      const ayak = el("div");
+      const iptal = el("button", "btn", "Vazge\xE7");
+      const ac = el("button", "btn ana", "A\xE7");
+      ayak.append(iptal, ac);
+      const m = modalAc({ baslik: defter.ad, govde: g, ayak });
+      setTimeout(() => i.focus(), 60);
+      let cevap = false;
+      iptal.onclick = () => {
+        m.kapat();
+        coz(null);
+      };
+      ac.onclick = async () => {
+        cevap = true;
+        const ozet = await window.mksPinOzet(i.value);
+        m.kapat();
+        coz(ozet);
+      };
+      m.kok.closest("dialog").addEventListener("close", () => {
+        if (!cevap) coz(null);
+      }, { once: true });
+    });
+  }
+  async function aktarmaDetay(h) {
+    const cikan = h.tur === "cekis";
+    const g = el("div", "yigin");
+    const kart = el("div", "panel");
+    const sat = (e, d, renk) => {
+      const r = el("div", "detay-satir");
+      r.appendChild(el("div", "e", e));
+      const dd = el("div", "d", d);
+      if (renk) dd.style.color = renk;
+      r.appendChild(dd);
+      return r;
+    };
+    kart.append(
+      sat("Ne", h.baslik || (cikan ? "\xC7eki\u015F" : "Sermaye")),
+      sat("Tutar", para(h.tutar)),
+      sat("Tarih", trTarihUzun(h.tarih)),
+      sat("Hesap", hesapAdi(h.hesap_id)),
+      sat("Bu defterde", cikan ? "Para \xE7\u0131k\u0131\u015F\u0131" : "Para giri\u015Fi")
+    );
+    if (h.tur === "cekis") {
+      kart.appendChild(sat("Gelir/gidere etkisi", "yok \u2014 k\xE2r hesab\u0131na girmez", "var(--ink3)"));
+    }
+    if (h.aciklama) kart.appendChild(sat("A\xE7\u0131klama", h.aciklama));
+    g.appendChild(kart);
+    const bilgi = el("p", "altbilgi");
+    bilgi.style.margin = "0";
+    bilgi.textContent = h.eslesen_id ? "Bu kayd\u0131n kar\u015F\u0131 defterde e\u015Fi var. Silersen ikisi birden silinir." : "Bu kayd\u0131n kar\u015F\u0131 defterdeki e\u015Fi bulunamad\u0131 (silinmi\u015F olabilir).";
+    g.appendChild(bilgi);
+    const ayak = el("div");
+    const kapatB = el("button", "btn", "Kapat");
+    ayak.appendChild(kapatB);
+    if (yetkili() || D.profil?.silebilir) {
+      const silB = el("button", "btn tehlike", "Sil");
+      ayak.insertBefore(silB, kapatB);
+      silB.onclick = async () => {
+        const uyari = h.eslesen_id ? `${para(h.tutar)} \xB7 ${trTarihUzun(h.tarih)}
+
+Her iki defterdeki kay\u0131t da silinecek.` : `${para(h.tutar)} \xB7 ${trTarihUzun(h.tarih)}`;
+        if (!await onayla("Aktarma silinsin mi?", uyari, "Sil")) return;
+        try {
+          await aktarmaSil(h.id, h.eslesen_id);
+          m.kapat();
+          bildir("Aktarma silindi");
+          yenile(true);
+        } catch (e) {
+          bildir(e.message, "kotu");
+        }
+      };
+    }
+    const m = modalAc({ baslik: cikan ? "\xC7eki\u015F" : "Sermaye giri\u015Fi", govde: g, ayak });
+    kapatB.onclick = () => m.kapat();
+  }
+  async function kendimeAktarFormu() {
+    if (!sahip()) {
+      bildir("Bu i\u015Flem yaln\u0131z hesap sahibine a\xE7\u0131k", "kotu");
+      return;
+    }
+    const kisisel = await kisiselKilidiAc();
+    if (!kisisel) return;
+    const isDefteri = D.defterler.find((d) => d.tur === "is");
+    if (!isDefteri) {
+      bildir("\u0130\u015F defteri bulunamad\u0131", "kotu");
+      return;
+    }
+    const isHesap = defterHesaplari(isDefteri.kod);
+    const ksHesap = defterHesaplari(kisisel.kod);
+    if (!isHesap.length || !ksHesap.length) {
+      bildir("\u0130ki defterde de en az bir kullan\u0131mdaki hesap olmal\u0131", "kotu");
+      return;
+    }
+    let yon = "isten";
+    const g = el("div");
+    const segY = el("div", "segment");
+    const yonDugme = (kod, ad) => {
+      const b = el("button", "", ad);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(yon === kod));
+      b.onclick = () => {
+        yon = kod;
+        Array.from(segY.children).forEach((c) => c.setAttribute("aria-pressed", String(c === b)));
+        yonuUygula();
+      };
+      return b;
+    };
+    segY.append(yonDugme("isten", "D\xFCkkandan kendime"), yonDugme("kisiselden", "Kendimden d\xFCkkana"));
+    g.appendChild(segY);
+    const ikili = el("div", "ikili");
+    const tutarL = el("label", "alan", "TUTAR (\u20BA)");
+    const tutar = el("input");
+    tutar.type = "number";
+    tutar.step = "0.01";
+    tutar.min = "0";
+    tutar.inputMode = "decimal";
+    tutar.required = true;
+    tutar.placeholder = "0,00";
+    tutarL.appendChild(tutar);
+    const tarihL = el("label", "alan", "TAR\u0130H");
+    const tarih = el("input");
+    tarih.type = "date";
+    tarih.required = true;
+    tarih.value = bugun();
+    tarihL.appendChild(tarih);
+    ikili.append(tutarL, tarihL);
+    g.appendChild(ikili);
+    const ikili2 = el("div", "ikili");
+    const kaynakL = el("label", "alan", "NEREDEN");
+    const kaynak = el("select");
+    kaynakL.appendChild(kaynak);
+    const hedefL = el("label", "alan", "NEREYE");
+    const hedef = el("select");
+    hedefL.appendChild(hedef);
+    ikili2.append(kaynakL, hedefL);
+    g.appendChild(ikili2);
+    const giderL = el("label", "onay-kutu");
+    const gider = el("input");
+    gider.type = "checkbox";
+    giderL.append(gider, document.createTextNode("Gider olarak say (yevmiye)"));
+    g.appendChild(giderL);
+    const aciklamaL = el("label", "alan", "A\xC7IKLAMA");
+    const aciklama = el("input");
+    aciklama.type = "text";
+    aciklama.placeholder = "\u0130ste\u011Fe ba\u011Fl\u0131";
+    aciklamaL.appendChild(aciklama);
+    g.appendChild(aciklamaL);
+    const not = el("p", "altbilgi");
+    not.style.margin = "0";
+    g.appendChild(not);
+    function doldur(sec, liste, defterAdi) {
+      sec.innerHTML = "";
+      liste.forEach((h) => {
+        const o = el("option", "", `${defterAdi} \xB7 ${h.ad}`);
+        o.value = h.id;
+        sec.appendChild(o);
+      });
+    }
+    function yonuUygula() {
+      const isten = yon === "isten";
+      doldur(kaynak, isten ? isHesap : ksHesap, isten ? isDefteri.ad : kisisel.ad);
+      doldur(hedef, isten ? ksHesap : isHesap, isten ? kisisel.ad : isDefteri.ad);
+      giderL.classList.toggle("gizli", !isten);
+      if (!isten) gider.checked = false;
+      notuYaz();
+    }
+    function notuYaz() {
+      if (yon !== "isten") {
+        not.textContent = "Kendi paran\u0131 d\xFCkkana koyuyorsun. D\xFCkkan\u0131n gelirine yaz\u0131lmaz, sadece hesap bakiyesi artar.";
+        return;
+      }
+      not.textContent = gider.checked ? 'Yevmiye olarak yaz\u0131lacak: d\xFCkkan\u0131n gideri say\u0131l\u0131r ve k\xE2r\u0131 d\xFC\u015F\xFCr\xFCr. Ki\u015Fisel defterine "D\xFCkkan geliri" olarak girer.' : 'K\xE2r pay\u0131 olarak yaz\u0131lacak: d\xFCkkan\u0131n hesab\u0131ndan d\xFC\u015Fer ama gider say\u0131lmaz, k\xE2r rakam\u0131 de\u011Fi\u015Fmez. Ki\u015Fisel defterine "D\xFCkkan geliri" olarak girer.';
+    }
+    gider.onchange = notuYaz;
+    yonuUygula();
+    const ayak = el("div");
+    const iptal = el("button", "btn", "Vazge\xE7");
+    const kaydet = el("button", "btn ana", "Aktar");
+    ayak.append(iptal, kaydet);
+    const m = modalAc({ baslik: "Kendime aktar", govde: g, ayak });
+    iptal.onclick = () => m.kapat();
+    setTimeout(() => tutar.focus(), 60);
+    kaydet.onclick = async () => {
+      const t = parseFloat(String(tutar.value).replace(",", "."));
+      if (!(t > 0)) {
+        bildir("Tutar girmelisin", "kotu");
+        tutar.focus();
+        return;
+      }
+      if (!kaynak.value || !hedef.value) {
+        bildir("Hesaplar\u0131 se\xE7", "kotu");
+        return;
+      }
+      const isten = yon === "isten";
+      kaydet.disabled = true;
+      try {
+        await aktarmaYaz({
+          kaynakDefter: isten ? isDefteri.kod : kisisel.kod,
+          kaynakHesapId: kaynak.value,
+          hedefDefter: isten ? kisisel.kod : isDefteri.kod,
+          hedefHesapId: hedef.value,
+          tutar: t,
+          tarih: tarih.value || bugun(),
+          aciklama: aciklama.value.trim() || null,
+          giderMi: isten && gider.checked
+        });
+        m.kapat();
+        bildir("Aktarma yap\u0131ld\u0131", "iyi");
+        yenile(true);
+      } catch (e) {
+        bildir(e.message, "kotu");
+        kaydet.disabled = false;
+      }
+    };
+  }
   function hareketFormu(mevcut, onAyar = {}) {
     const yeni = !mevcut;
     let tur = mevcut?.tur ?? onAyar.tur ?? "gider";
@@ -1465,6 +1823,7 @@
         tur = kod;
         Array.from(segT.children).forEach((c) => c.setAttribute("aria-pressed", String(c === b)));
         katDoldur();
+        if (cariDoldur) cariDoldur(cari.value);
       };
       segT.appendChild(b);
     });
@@ -1523,7 +1882,7 @@
     baslik.value = mevcut?.baslik ?? onAyar.baslik ?? "";
     baslikL.appendChild(baslik);
     bas.appendChild(baslikL);
-    let org = null, cari = null;
+    let org = null, cari = null, cariDoldur = null, cariSuzmeKapali = false;
     if (D.defter === "is") {
       const orgL = el("label", "alan", "ORGAN\u0130ZASYON (iste\u011Fe ba\u011Fl\u0131)");
       org = el("select");
@@ -1537,16 +1896,50 @@
       orgL.appendChild(org);
       bas.appendChild(orgL);
       const cariL = el("label", "alan", "CAR\u0130 (iste\u011Fe ba\u011Fl\u0131)");
+      const cariSatir = el("div", "sec-ekle");
       cari = el("select");
-      cari.appendChild(Object.assign(el("option", "", "\u2014 yok \u2014"), { value: "" }));
-      D.cariler.filter((c) => c.aktif).forEach((c) => {
-        const op = el("option", "", c.ad);
-        op.value = c.id;
-        cari.appendChild(op);
-      });
-      cari.value = mevcut?.cari_id ?? onAyar.cari_id ?? "";
-      cariL.appendChild(cari);
+      const cariEkle = el("button", "btn kucuk", "+ Ekle");
+      cariEkle.type = "button";
+      cariEkle.title = "Yeni cari kart\u0131 ekle";
+      cariSatir.append(cari, cariEkle);
+      cariL.appendChild(cariSatir);
       bas.appendChild(cariL);
+      const suzmeNot = el("button", "btn baglanti", "");
+      suzmeNot.type = "button";
+      suzmeNot.style.cssText = "align-self:flex-start;padding:2px 0";
+      bas.appendChild(suzmeNot);
+      cariDoldur = (secili) => {
+        const hepsi = D.cariler.filter((c) => c.aktif);
+        const musteriMi = (c) => (c.tur || "").toLocaleLowerCase("tr") === "m\xFC\u015Fteri";
+        const liste = cariSuzmeKapali ? hepsi : hepsi.filter((c) => tur === "gelir" === musteriMi(c));
+        cari.innerHTML = "";
+        cari.appendChild(Object.assign(el("option", "", "\u2014 yok \u2014"), { value: "" }));
+        liste.forEach((c) => {
+          const op = el("option", "", c.ad);
+          op.value = c.id;
+          cari.appendChild(op);
+        });
+        cari.value = secili && liste.some((c) => c.id === secili) ? secili : "";
+        const gizlenen = hepsi.length - liste.length;
+        if (cariSuzmeKapali) {
+          suzmeNot.textContent = "Yaln\u0131z uygun cariler";
+          suzmeNot.classList.remove("gizli");
+        } else if (gizlenen > 0) {
+          suzmeNot.textContent = `T\xFCm\xFCn\xFC g\xF6ster (${gizlenen} cari gizli)`;
+          suzmeNot.classList.remove("gizli");
+        } else {
+          suzmeNot.classList.add("gizli");
+        }
+      };
+      suzmeNot.onclick = () => {
+        cariSuzmeKapali = !cariSuzmeKapali;
+        cariDoldur(cari.value);
+      };
+      cariEkle.onclick = () => cariFormu(null, { sonra: (k) => {
+        cariSuzmeKapali = true;
+        cariDoldur(k.id);
+      } });
+      cariDoldur(mevcut?.cari_id ?? onAyar.cari_id ?? "");
     }
     const aciklamaL = el("label", "alan", "A\xC7IKLAMA");
     const aciklama = el("textarea");
@@ -1778,25 +2171,26 @@
     adL.appendChild(ad);
     g.appendChild(adL);
     const musL = el("label", "alan", "M\xDC\u015ETER\u0130");
+    const musSatir = el("div", "sec-ekle");
     const mus = el("select");
-    mus.appendChild(Object.assign(el("option", "", "\u2014 se\xE7 \u2014"), { value: "" }));
-    D.musteriler.forEach((x) => {
-      const o = el("option", "", x.ad);
-      o.value = x.id;
-      mus.appendChild(o);
-    });
-    const yeniMus = el("option", "", "+ Yeni m\xFC\u015Fteri\u2026");
-    yeniMus.value = "__yeni";
-    mus.appendChild(yeniMus);
-    mus.value = mevcut?.musteri_id ?? "";
-    musL.appendChild(mus);
+    const musDoldur = (secili) => {
+      mus.innerHTML = "";
+      mus.appendChild(Object.assign(el("option", "", "\u2014 se\xE7 \u2014"), { value: "" }));
+      D.musteriler.forEach((x) => {
+        const o = el("option", "", x.ad);
+        o.value = x.id;
+        mus.appendChild(o);
+      });
+      mus.value = secili ?? "";
+    };
+    musDoldur(mevcut?.musteri_id);
+    const musEkle = el("button", "btn kucuk", "+ Ekle");
+    musEkle.type = "button";
+    musEkle.title = "Yeni m\xFC\u015Fteri kart\u0131 ekle";
+    musEkle.onclick = () => musteriFormu(null, { sonra: (k) => musDoldur(k.id) });
+    musSatir.append(mus, musEkle);
+    musL.appendChild(musSatir);
     g.appendChild(musL);
-    const yeniMusL = el("label", "alan gizli", "YEN\u0130 M\xDC\u015ETER\u0130 ADI");
-    const yeniMusI = el("input");
-    yeniMusI.type = "text";
-    yeniMusL.appendChild(yeniMusI);
-    g.appendChild(yeniMusL);
-    mus.onchange = () => yeniMusL.classList.toggle("gizli", mus.value !== "__yeni");
     const i1 = el("div", "ikili");
     const turL = el("label", "alan", "T\xDCR");
     const tur = el("select");
@@ -1890,17 +2284,7 @@
       }
       kaydet.disabled = true;
       try {
-        let musteriId = mus.value;
-        if (musteriId === "__yeni") {
-          const yeniAd = yeniMusI.value.trim();
-          if (!yeniAd) {
-            bildir("M\xFC\u015Fteri ad\u0131n\u0131 gir", "kotu");
-            kaydet.disabled = false;
-            return;
-          }
-          const yeniK = await musteriYaz({ ad: yeniAd });
-          musteriId = yeniK.id;
-        }
+        const musteriId = mus.value;
         await orgYaz({
           ad: ad.value.trim(),
           tur: tur.value,
@@ -1986,6 +2370,9 @@
     const ham = D.cariler.find((x) => x.id === id);
     if (!c || !ham) return;
     const g = el("div", "yigin");
+    const bakiye = sayi(c.bakiye);
+    const borclanmaVar = sayi(c.toplam_borclanma) > 4e-3 || sayi(ham.acilis_bakiye) > 4e-3;
+    const pesin = !borclanmaVar && bakiye < -4e-3;
     const kart = el("div", "panel");
     const sat = (e, d, renk) => {
       const r = el("div", "detay-satir");
@@ -2000,9 +2387,27 @@
       sat("Telefon", ham.telefon || "\u2014"),
       sat("A\xE7\u0131l\u0131\u015F bakiyesi", para(ham.acilis_bakiye)),
       sat("Toplam bor\xE7lanma", para(c.toplam_borclanma)),
-      sat("Toplam \xF6deme", para(c.toplam_odeme), "var(--gelir-ink)"),
-      sat("KALAN BOR\xC7", para(c.bakiye), sayi(c.bakiye) > 4e-3 ? "var(--gider-ink)" : "var(--ink3)")
+      sat("Toplam \xF6deme", para(c.toplam_odeme), "var(--gelir-ink)")
     );
+    if (sayi(c.toplam_tahsilat) > 4e-3) {
+      kart.appendChild(sat("Ondan al\u0131nan", para(c.toplam_tahsilat), "var(--uyari-ink)"));
+    }
+    if (pesin) {
+      kart.appendChild(sat("DURUM", "Bor\xE7 yok", "var(--ink3)"));
+      const n = el(
+        "p",
+        "altbilgi",
+        `Bu cariye toplam ${paraTam(-bakiye)} \xF6denmi\u015F, \xF6nceden girilmi\u015F bir bor\xE7lanma kayd\u0131 yok \u2014 pe\u015Fin \xE7al\u0131\u015F\u0131ld\u0131\u011F\u0131 i\xE7in normal.`
+      );
+      n.style.cssText = "padding:0 14px 12px;margin:0";
+      kart.appendChild(n);
+    } else {
+      kart.appendChild(sat(
+        "KALAN BOR\xC7",
+        para(bakiye),
+        bakiye > 4e-3 ? "var(--gider-ink)" : "var(--ink3)"
+      ));
+    }
     if (ham.notlar) kart.appendChild(sat("Not", ham.notlar));
     g.appendChild(kart);
     const yukleniyor = el("div", "bos", "Hareketler y\xFCkleniyor\u2026");
@@ -2029,55 +2434,97 @@
     try {
       const borclar = await borclanmalar(id);
       yukleniyor.remove();
-      if (borclar.length) {
-        const s = el("section", "panel");
-        const b = el("div", "grafik-basi");
-        b.style.padding = "14px 14px 4px";
-        b.appendChild(el("h3", "", "Bor\xE7lanmalar"));
-        s.appendChild(b);
-        const l = el("div", "liste");
-        borclar.forEach((x) => {
-          const r = butonSatir(() => {
-            m.kapat();
-            borcFormu(x, id);
-          });
-          const sol = el("div");
-          sol.appendChild(el("div", "baslik", x.aciklama || "Bor\xE7lanma"));
-          const alt = el("div", "alt");
-          alt.appendChild(el("span", "", trTarihUzun(x.tarih)));
-          if (x.vade) {
-            const f = gunFarki(x.vade);
-            alt.appendChild(el(
-              "span",
-              "rozet " + (f < 0 ? "kotu" : f <= 7 ? "uyari" : ""),
-              f < 0 ? `${-f} g\xFCn gecikti` : `vade ${trTarih(x.vade)}`
-            ));
-          }
-          sol.appendChild(alt);
-          r.append(sol, el("div", "tutar k", para(x.tutar)));
-          l.appendChild(r);
+      const kayitlar = [
+        ...borclar.map((b) => ({
+          tip: "borc",
+          tarih: b.tarih,
+          tutar: sayi(b.tutar),
+          etki: sayi(b.tutar),
+          // borç artar
+          baslik: b.aciklama || "Bor\xE7lanma",
+          ham: b
+        })),
+        ...D.hareketler.filter((h) => h.cari_id === id).map((h) => ({
+          tip: h.tur === "gelir" ? "tahsilat" : "odeme",
+          tarih: h.tarih,
+          tutar: sayi(h.tutar),
+          etki: h.tur === "gelir" ? sayi(h.tutar) : -sayi(h.tutar),
+          baslik: h.baslik || h.aciklama || h.kategori,
+          ham: h
+        }))
+      ].sort((a, b) => a.tarih < b.tarih ? 1 : a.tarih > b.tarih ? -1 : 0);
+      if (!kayitlar.length) {
+        g.appendChild(bosDurum(
+          "Bu cariye ait hareket yok",
+          "Bor\xE7land\u0131m ya da \xD6deme yap ile ilk kayd\u0131 gir."
+        ));
+        return;
+      }
+      const s2 = el("section", "panel");
+      const b2 = el("div", "grafik-basi");
+      b2.style.padding = "14px 14px 4px";
+      b2.appendChild(el("h3", "", `Cari hareketleri (${kayitlar.length})`));
+      s2.appendChild(b2);
+      const l = el("div", "liste");
+      let kalan = bakiye;
+      let sonAy = null;
+      const bugunIso = bugun();
+      kayitlar.forEach((k2) => {
+        const a = ayAnahtar(k2.tarih);
+        if (a !== sonAy) {
+          sonAy = a;
+          l.appendChild(el("div", "grup-basi", ayAdi(a)));
+        }
+        const r = butonSatir(() => {
+          m.kapat();
+          if (k2.tip === "borc") borcFormu(k2.ham, id);
+          else hareketFormu(k2.ham);
         });
-        s.appendChild(l);
-        g.appendChild(s);
+        const sol = el("div");
+        sol.appendChild(el("div", "baslik", k2.baslik));
+        const alt = el("div", "alt");
+        const rozet = { borc: ["Bor\xE7lanma", "kotu"], odeme: ["\xD6deme", "iyi"], tahsilat: ["Tahsilat", "uyari"] }[k2.tip];
+        alt.appendChild(el("span", "rozet " + rozet[1], rozet[0]));
+        alt.appendChild(el("span", "", trTarihUzun(k2.tarih)));
+        if (k2.tip === "borc" && k2.ham.vade) {
+          const f = gunFarki(k2.ham.vade);
+          alt.appendChild(el(
+            "span",
+            "rozet " + (f < 0 ? "kotu" : f <= 7 ? "uyari" : ""),
+            f < 0 ? `${-f} g\xFCn gecikti` : `vade ${trTarih(k2.ham.vade)}`
+          ));
+        }
+        if (k2.tip !== "borc") alt.appendChild(el("span", "", "\xB7 " + hesapAdi(k2.ham.hesap_id)));
+        sol.appendChild(alt);
+        const sag = el("div");
+        sag.appendChild(el(
+          "div",
+          "tutar " + (k2.etki > 0 ? "k" : "g"),
+          (k2.etki > 0 ? "+" : "\u2212") + para(k2.tutar)
+        ));
+        if (!pesin) {
+          sag.appendChild(el("div", "tarih", "kalan " + paraTam(kalan)));
+        }
+        kalan -= k2.etki;
+        r.append(sol, sag);
+        l.appendChild(r);
+      });
+      s2.appendChild(l);
+      if (pesin) {
+        const n = el(
+          "p",
+          "altbilgi",
+          "Bor\xE7lanma kayd\u0131 olmad\u0131\u011F\u0131 i\xE7in sat\u0131rlarda y\xFCr\xFCyen bakiye g\xF6sterilmiyor."
+        );
+        n.style.cssText = "padding:10px 14px 14px;margin:0";
+        s2.appendChild(n);
       }
-      const odemeler = D.hareketler.filter((h) => h.cari_id === id);
-      if (odemeler.length) {
-        const s = el("section", "panel");
-        const b = el("div", "grafik-basi");
-        b.style.padding = "14px 14px 4px";
-        b.appendChild(el("h3", "", `Kasa hareketleri (${odemeler.length})`));
-        s.appendChild(b);
-        const l = el("div", "liste");
-        odemeler.slice(0, 20).forEach((h) => l.appendChild(hareketSatiri(h)));
-        s.appendChild(l);
-        g.appendChild(s);
-      }
-      if (!borclar.length && !odemeler.length) g.appendChild(bosDurum("Bu cariye ait hareket yok"));
+      g.appendChild(s2);
     } catch (e) {
       yukleniyor.textContent = e.message;
     }
   }
-  function cariFormu(mevcut) {
+  function cariFormu(mevcut, onAyar = {}) {
     const yeni = !mevcut;
     const g = el("div");
     const adL = el("label", "alan", "CAR\u0130 ADI");
@@ -2144,7 +2591,7 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
       }
       kaydet.disabled = true;
       try {
-        await cariYaz({
+        const kayit = await cariYaz({
           ad: ad.value.trim(),
           tur: tur.value,
           telefon: tel.value.trim() || null,
@@ -2154,7 +2601,10 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
         }, mevcut?.id);
         m.kapat();
         bildir("Kaydedildi", "iyi");
-        yenile(true);
+        if (onAyar.sonra) {
+          listeyeEkle("cariler", kayit);
+          onAyar.sonra(kayit);
+        } else yenile(true);
       } catch (e) {
         bildir(e.message, "kotu");
         kaydet.disabled = false;
@@ -2361,7 +2811,7 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
     };
     kapat.onclick = () => m.kapat();
   }
-  function musteriFormu(mevcut) {
+  function musteriFormu(mevcut, onAyar = {}) {
     const yeni = !mevcut;
     const g = el("div");
     const adL = el("label", "alan", "AD SOYAD");
@@ -2411,7 +2861,7 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
       }
       kaydet.disabled = true;
       try {
-        await musteriYaz({
+        const kayit = await musteriYaz({
           ad: ad.value.trim(),
           telefon: tel.value.trim() || null,
           instagram: ins.value.trim() || null,
@@ -2419,7 +2869,10 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
         }, mevcut?.id);
         m.kapat();
         bildir("Kaydedildi", "iyi");
-        yenile(true);
+        if (onAyar.sonra) {
+          listeyeEkle("musteriler", kayit);
+          onAyar.sonra(kayit);
+        } else yenile(true);
       } catch (e) {
         bildir(e.message, "kotu");
         kaydet.disabled = false;
@@ -2564,6 +3017,72 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
         t.innerHTML = h;
         s.appendChild(t);
         k.appendChild(s);
+      }
+    }
+    if (D.defter === "is" && sahip()) {
+      const [db, ds] = aralik();
+      const donemli = D.hareketler.filter((h) => h.tarih >= db && h.tarih <= ds);
+      const yevmiye = donemli.filter((h) => h.tur === "gider" && h.kategori === "Sahip yevmiyesi");
+      const karPayi = donemli.filter((h) => h.tur === "cekis");
+      const sermaye = donemli.filter((h) => h.tur === "giris");
+      const tY = yevmiye.reduce((t, h) => t + sayi(h.tutar), 0);
+      const tK = karPayi.reduce((t, h) => t + sayi(h.tutar), 0);
+      const tS = sermaye.reduce((t, h) => t + sayi(h.tutar), 0);
+      if (tY || tK || tS) {
+        const sc = el("section", "panel");
+        const bc = el("div", "grafik-basi");
+        bc.style.padding = "14px 14px 4px";
+        bc.appendChild(el("h3", "", "Sahip \xE7eki\u015Fleri"));
+        const tt = el("div", "bn");
+        tt.style.fontSize = "22px";
+        tt.textContent = paraTam(tY + tK);
+        bc.appendChild(tt);
+        sc.appendChild(bc);
+        const dl = el("div");
+        const sat = (e, d, alt, renk) => {
+          const r = el("div", "detay-satir");
+          const sol = el("div");
+          sol.appendChild(el("div", "e", e));
+          if (alt) {
+            const a = el("div", "altbilgi", alt);
+            a.style.marginTop = "2px";
+            sol.appendChild(a);
+          }
+          r.appendChild(sol);
+          const dd = el("div", "d", d);
+          if (renk) dd.style.color = renk;
+          r.appendChild(dd);
+          return r;
+        };
+        dl.appendChild(sat(
+          `Yevmiye (${yevmiye.length})`,
+          paraTam(tY),
+          "Gider say\u0131l\u0131r, k\xE2r\u0131 d\xFC\u015F\xFCr\xFCr",
+          "var(--gider-ink)"
+        ));
+        dl.appendChild(sat(
+          `K\xE2r pay\u0131 (${karPayi.length})`,
+          paraTam(tK),
+          "Gider say\u0131lmaz, k\xE2r etkilenmez",
+          "var(--bilgi-ink)"
+        ));
+        if (tS) {
+          dl.appendChild(sat(
+            `Konulan sermaye (${sermaye.length})`,
+            paraTam(tS),
+            "Gelir say\u0131lmaz",
+            "var(--gelir-ink)"
+          ));
+        }
+        sc.appendChild(dl);
+        const nt = el(
+          "p",
+          "altbilgi",
+          "K\xE2r pay\u0131 \xE7eki\u015Fleri kasadan \xE7\u0131kar ama k\xE2r hesab\u0131na girmez \u2014 k\xE2r ile eldeki nakit farkl\u0131 \u015Feylerdir."
+        );
+        nt.style.cssText = "padding:0 14px 14px;margin:6px 0 0";
+        sc.appendChild(nt);
+        k.appendChild(sc);
       }
     }
     const s3 = el("section", "panel");
@@ -3108,6 +3627,7 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
 
   // js/app.js
   var aktifSekme = "panel";
+  var SIFIRLAMA_ILE_GELDI = /[#&]type=recovery/.test(location.hash);
   function girisiGoster() {
     $("#yukleniyor").classList.add("gizli");
     $("#uygulama").classList.add("gizli");
@@ -3408,8 +3928,13 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
     g.appendChild(cikisB);
     const m = modalAc({ baslik: "Hesab\u0131m", govde: g });
   }
-  function parolaFormu() {
+  function parolaFormu(onAyar = {}) {
     const g = el("div");
+    if (onAyar.not) {
+      const n = el("p", "basari", onAyar.not);
+      n.style.margin = "0";
+      g.appendChild(n);
+    }
     const l1 = el("label", "alan", "YEN\u0130 PAROLA (en az 6 karakter)");
     const p1 = el("input");
     p1.type = "password";
@@ -3425,7 +3950,7 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
     const iptal = el("button", "btn", "Vazge\xE7");
     const kaydet = el("button", "btn ana", "De\u011Fi\u015Ftir");
     ayak.append(iptal, kaydet);
-    const m = modalAc({ baslik: "Parolam\u0131 de\u011Fi\u015Ftir", govde: g, ayak });
+    const m = modalAc({ baslik: onAyar.baslik || "Parolam\u0131 de\u011Fi\u015Ftir", govde: g, ayak });
     iptal.onclick = () => m.kapat();
     setTimeout(() => p1.focus(), 60);
     kaydet.onclick = async () => {
@@ -3526,6 +4051,12 @@ Sadece listede g\xF6rmek istemiyorsan silmek yerine "Kullan\u0131mda" i\u015Fare
     ekranCiz();
     cevrimDurumu();
     masaustuIslemleri();
+    if (SIFIRLAMA_ILE_GELDI) {
+      setTimeout(() => parolaFormu({
+        baslik: "Yeni parola belirle",
+        not: "S\u0131f\u0131rlama ba\u011Flant\u0131s\u0131yla giri\u015F yapt\u0131n. Yeni parolan\u0131 \u015Fimdi belirle."
+      }), 400);
+    }
   }
   function cevrimDurumu() {
     const kapali = !navigator.onLine || D.cevrimdisi;
